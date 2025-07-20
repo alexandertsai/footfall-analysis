@@ -1,4 +1,3 @@
-import torch.serialization
 from ultralytics import YOLO
 import cv2
 import numpy as np
@@ -8,18 +7,44 @@ import csv
 import os
 from PIL import ImageGrab
 
+# Operating hours configuration
+START_HOUR = 8  # 8am
+END_HOUR = 22   # 10pm (22 = 10pm in 24-hour format)
+
 # Visitor tracking
 visitor_ids = set()  # Will be reset every hour
 daily_hourly_visitors = {}  # Format: {date_str: {hour: count}}
 current_hour = datetime.datetime.now().hour
 current_date = datetime.datetime.now().date()
 
+def create_exclusion_mask(frame_shape):
+    """Create a mask to exclude the red seating area"""
+    mask = np.ones(frame_shape[:2], dtype=np.uint8) * 255
+    
+    # Define the red area as a polygon (approximate coordinates)
+    # You'll need to adjust these coordinates based on your capture area
+    red_area_points = np.array([
+        [400, 0],   # Top left
+        [750, 0],  # Top right
+        [750, 550],  # Bottom right
+        [400, 550]    # Bottom Left
+    ], np.int32)
+    
+    # Set the red area to 0 (excluded)
+    cv2.fillPoly(mask, [red_area_points], 0)
+    return mask
+
 def capture_screen():
     # Capture screen (adjust coordinates to your surveillance area)
     # Format should be (left, top, right, bottom)
-    screen = np.array(ImageGrab.grab(bbox=(264, 342, 1051, 868)))
+    screen = np.array(ImageGrab.grab(bbox=(237, 64, 1197, 715)))
     screen = cv2.cvtColor(screen, cv2.COLOR_BGR2RGB)
-    return screen
+    
+    # Excludes pesky areas
+    mask = create_exclusion_mask(screen.shape)
+    screen_masked = cv2.bitwise_and(screen, screen, mask=mask)
+    
+    return screen_masked 
 
 def is_new_visitor(track_id, cooldown_minutes=30):
     current_time = time.time()
@@ -40,8 +65,8 @@ def update_csv_file():
     """Update the data.csv file with current visitor counts"""
     csv_file = "data.csv"
     
-    # Define all hours for columns (9am to 10pm)
-    hours = list(range(9, 22))
+    # Define all hours for columns
+    hours = list(range(START_HOUR, END_HOUR + 1))
     
     # Get all dates we have data for
     all_dates = list(daily_hourly_visitors.keys())
@@ -83,8 +108,8 @@ try:
                     
                     # Parse hours (starting from column 1)
                     for i, count in enumerate(row[1:]):
-                        if i < 13:  # We have 13 hours (9-21)
-                            hour = i + 9  # Hours start at 9
+                        if i < (END_HOUR - START_HOUR + 1):  # Number of operating hours
+                            hour = i + START_HOUR  # Hours start at START_HOUR
                             try:
                                 hourly_data[hour] = int(count)
                             except ValueError:
@@ -145,12 +170,12 @@ try:
                 print(f"Reset visitor count for new hour: {current_hour}:00")
                 
                 # If we're starting a new operating day, update the tracking
-                if current_hour == 9 and now.date() != last_operating_day:
+                if current_hour == START_HOUR and now.date() != last_operating_day:
                     last_operating_day = now.date()
                     print(f"Starting a new operating day: {date_str}")
             
-            # Check if we're in operating hours (9am-10pm)
-            currently_in_operating_hours = 9 <= now.hour < 22
+            # Check if we're in operating hours
+            currently_in_operating_hours = START_HOUR <= now.hour <= END_HOUR
             
             # Detect transitions in/out of operating hours
             if currently_in_operating_hours and not in_operating_hours:
